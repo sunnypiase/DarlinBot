@@ -2,7 +2,12 @@
 
 namespace Darlin.Domain.Models;
 
-public class ClosedPositionDto
+public class ClosedPositionDto : ClosedPositionMinimalDto
+{
+    public OrderBookSnapshot OrderBookStateOnClose { get; set; }
+}
+
+public class ClosedPositionMinimalDto
 {
     public string TickerName { get; set; }
     public decimal TickerBidPrice { get; set; }
@@ -28,5 +33,4 @@ public class ClosedPositionDto
     public decimal MaxPotentialPnl { get; set; }
     public DateTime CloseTime { get; set; }
     public string CloseReason { get; set; }
-    public OrderBookSnapshot OrderBookStateOnClose { get; set; }
 }

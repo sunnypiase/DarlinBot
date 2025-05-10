@@ -1,4 +1,4 @@
-﻿version: '3.8'
+﻿version: "3.8"
 
 services:
   seq:
@@ -33,7 +33,8 @@ services:
     environment:
       Seq__ServerUrl: "http://seq:5341"
       Mongo__ConnectionString: "mongodb://mongo:27017"
-      Mongo__Database: "DarlinDb"
+    ports:
+      - "5000:5000"
     volumes:
       - ./logs:/app/logs
     restart: on-failure

@@ -18,7 +18,7 @@ public class BinanceVolumeRetriever
             KlineInterval.FiveMinutes,
             start,
             end,
-            288*5);
+            288 * 5);
 
         if (!result.Success || result.Data == null)
             throw new Exception(result.Error?.Message ?? "Failed to fetch historical volumes");

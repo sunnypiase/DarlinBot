@@ -16,27 +16,19 @@ public class OrderBlockUpdatedEvent : EventBase
             var bestShort = ticker.OrderBlockManager.GetBestSignalOrderBlock(OrderBookSide.Ask);
 
             if (ticker.PendingLong?.OrderBlock != bestLong)
-            {
                 ticker.PendingLong = bestLong is null
                     ? null
                     : new PendingPosition(bestLong, ticker.PipSize);
-
-                // if (bestLong is not null)
-                //     Log.Debug("{EventId}: {Ticker} PendingLong → {@OrderBlock}",
-                //         LogEvents.PendingLong, ticker.Name, bestLong);
-            }
-
+            // if (bestLong is not null)
+            //     Log.Debug("{EventId}: {Ticker} PendingLong → {@OrderBlock}",
+            //         LogEvents.PendingLong, ticker.Name, bestLong);
             if (ticker.PendingShort?.OrderBlock != bestShort)
-            {
                 ticker.PendingShort = bestShort is null
                     ? null
                     : new PendingPosition(bestShort, ticker.PipSize);
-
-                // if (bestShort is not null)
-                //     Log.Debug("{EventId}: {Ticker} PendingShort → {@OrderBlock}",
-                //         LogEvents.PendingShort, ticker.Name, bestShort);
-            }
-
+            // if (bestShort is not null)
+            //     Log.Debug("{EventId}: {Ticker} PendingShort → {@OrderBlock}",
+            //         LogEvents.PendingShort, ticker.Name, bestShort);
             if (ticker.OpenPosition == null &&
                 (ticker.PendingLong?.ShouldOpen(ticker.BidPrice, ticker.AskPrice) ?? false))
             {

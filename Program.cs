@@ -1,82 +1,63 @@
-using Binance.Net.Clients;
-using Darlin;
-using Darlin.DataRetrievers;
-using Darlin.Domain.Services;
-using Darlin.Loggers;
-using MongoDB.Driver;
+using Darlin.Domain.Models;
+using Darlin.Repositories;
+using Darlin.StartUp;
 using Serilog;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-// ─── Load config ─────────────────────────────────────────────────────────────
+// ─── Load configuration ─────────────────────────────────────────────────────
 builder.Configuration
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", false, true)
     .AddEnvironmentVariables();
 
-// ─── Read Seq URL (from appsettings.json or overridden by ENV Seq__ServerUrl) ──
-var seqUrl = builder.Configuration["Seq:ServerUrl"];
+// ─── Bind settings with Options pattern ──────────────────────────────────────
+builder.Services.Configure<MongoSettings>(builder.Configuration.GetSection("Mongo"));
+builder.Services.Configure<SeqSettings>(builder.Configuration.GetSection("Seq"));
 
-// ─── Serilog bootstrap ───────────────────────────────────────────────────────
-var loggerConfig = new LoggerConfiguration()
-    .ReadFrom.Configuration(builder.Configuration) // picks up Console & File sinks
-    .Enrich.FromLogContext();
-
-// only add Seq if a valid URL is present
-if (!string.IsNullOrWhiteSpace(seqUrl)) loggerConfig.WriteTo.Seq(seqUrl);
-
-Log.Logger = loggerConfig.CreateLogger();
-
-// ─── Replace default .NET logging with Serilog ───────────────────────────────
-builder.Logging.ClearProviders();
-builder.Logging.AddSerilog();
-
-// ─── DI registrations ────────────────────────────────────────────────────────
-builder.Services.AddSingleton(new BinanceSocketClient());
-
-builder.Services.AddSingleton<BinanceDayTickerStatsRetriever>();
-builder.Services.AddSingleton<BinanceExchangeInfoRetriever>();
-builder.Services.AddSingleton<BinanceOrderBookSnapshotRetriever>();
-builder.Services.AddSingleton<BinanceVolumeRetriever>();
-
-builder.Services.AddSingleton<IMongoClient>(sp =>
-    new MongoClient(sp.GetRequiredService<IConfiguration>()
-        .GetValue<string>("Mongo:ConnectionString"))
-);
-
-// 2) Our logger
-builder.Services.AddSingleton<IClosedPositionLogger, MongoClosedPositionLogger>();
-builder.Services.AddSingleton<TickerManager>();
-builder.Services.AddSingleton<PreInitializationService>();
-builder.Services.AddSingleton<InitializationService>();
-builder.Services.AddHostedService<Worker>();
-
-// ─── Run ────────────────────────────────────────────────────────────────────
-try
+// ─── Configure Serilog as the host logger ────────────────────────────────────
+builder.Host.UseSerilog((context, _, loggerConfig) =>
 {
-    Log.Information("▶ Host starting up");
-    await builder.Build().RunAsync();
-}
-catch (Exception ex)
-{
-    Log.Fatal(ex, "Host terminated unexpectedly");
-}
-finally
-{
-    Log.CloseAndFlush();
-}
+    loggerConfig
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext();
 
-public static class Config
-{
-    public static readonly HashSet<string> Blacklist = new()
-    {
-        "USDCUSDT", "FDUSDUSDT", "EURUSDT", "WIFUSDT", "VITEUSDT",
-        "AMBUSDT", "LITUSDT", "STMXUSDT", "CLVUSDT", "USTCUSDT", "BNXUSDT",
-        "XUSDUSDT", "VIDTUSDT", "AGIXUSDT", "LINAUSDT", "FTMUSDT", "WAVESUSDT",
-        "OCEANUSDT", "STRAXUSDT", "RENUSDT", "UNFIUSDT", "DGBUSDT", "TROYUSDT",
-        "SNTUSDT", "BLZUSDT", "COMBOUSDT", "NULSUSDT", "NOTUSDT", "KEYUSDT", "LOOMUSDT",
-        "MDTUSDT", "BONDUSDT", "KLAYUSDT", "XEMUSDT", "OMGUSDT", "REEFUSDT", "RADUSDT",
-        "GLMRUSDT", "BADGERUSDT", "CTKUSDT", "DARUSDT",
-        "SLPUSDT", "CVXUSDT", "BALUSDT", "ORBSUSDT", "STPTUSDT", "ALPACAUSDT"
-    };
-}
+    var seqUrl = context.Configuration["Seq:ServerUrl"];
+    if (!string.IsNullOrWhiteSpace(seqUrl)) loggerConfig.WriteTo.Seq(seqUrl);
+});
+
+// ─── Register dependencies via extension methods ─────────────────────────────
+builder.Services
+    .AddMongoClient()
+    .AddBinanceClients()
+    .AddDataRetrievers()
+    .AddRepositories()
+    .AddLoggingServices()
+    .AddDomainServices()
+    .AddHostedServices();
+
+// ─── Build and configure HTTP pipeline ───────────────────────────────────────
+var app = builder.Build();
+
+// ─── API routes ───────────────────────────────────────────────────────────────
+var api = app.MapGroup("/api/v1");
+
+// health-check / test
+api.MapGet("/test", () => Results.Ok("Success!"))
+    .WithName("GetTest")
+    .Produces<string>();
+
+// GET /api/v1/closed-positions
+api.MapGet("/closed-positions", (IClosedPositionsRepository repo) =>
+        Results.Ok(repo.GetClosedPositions()))
+    .WithName("GetClosedPositions")
+    .Produces<IEnumerable<ClosedPositionDto>>();
+
+// GET /api/v1/closed-positions/minimal
+api.MapGet("/closed-positions/minimal", (IClosedPositionsRepository repo) =>
+        Results.Ok(repo.GetClosedPositionsMinimal()))
+    .WithName("GetClosedPositionsMinimal")
+    .Produces<IEnumerable<ClosedPositionMinimalDto>>();
+
+Log.Information("▶ Host starting up");
+await app.RunAsync();

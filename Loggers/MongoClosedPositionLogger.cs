@@ -9,8 +9,8 @@ public class MongoClosedPositionLogger : IClosedPositionLogger
 
     public MongoClosedPositionLogger(IMongoClient client, IConfiguration cfg)
     {
-        var dbName   = cfg["Mongo:Database"] ?? "DarlinDb";
-        var db       = client.GetDatabase(dbName);
+        var dbName = cfg["Mongo:Database"] ?? "DarlinDb";
+        var db = client.GetDatabase(dbName);
         _collection = db.GetCollection<CoinPositions>("coinPositions");
     }
 
