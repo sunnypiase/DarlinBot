@@ -4,9 +4,9 @@ namespace Darlin.Domain.Models;
 
 public class OrderBlock
 {
-    public decimal Price { get; set; }
-    public decimal Volume { get; set; }
-    public OrderBookSide Side { get; set; } // Bid is long, Ask is short
+    public decimal Price { get; init; }
+    public decimal Volume { get; init; }
+    public OrderBookSide Side { get; init; } // Bid is long, Ask is short
 
     public DateTime CreationTime { get; set; } = DateTime.UtcNow;
 

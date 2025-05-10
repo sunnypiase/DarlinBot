@@ -1,58 +1,43 @@
 ﻿using Binance.Net.Clients;
+using Darlin.Logging;
+using Serilog;
 
 namespace Darlin.DataRetrievers;
 
-public class BinanceOrderBookSnapshotRetriever(ILogger<BinanceOrderBookSnapshotRetriever> logger)
+public class BinanceOrderBookSnapshotRetriever
 {
-    /// <summary>
-    ///     Retrieves a fresh snapshot of the order book from Binance COIN‑M Futures using the REST API.
-    /// </summary>
-    /// <param name="symbol">The symbol (e.g. "BTCUSD_PERP") in the correct format</param>
-    /// <param name="limit">The order book depth limit (for example, 1000)</param>
-    /// <returns>A tuple of lists containing ask updates and bid updates.</returns>
     public async Task<(List<KeyValuePair<decimal, decimal>> Ask, List<KeyValuePair<decimal, decimal>> Bid)>
         GetOrderBookSnapshot(string symbol, int limit)
     {
-        var askUpdates = new List<KeyValuePair<decimal, decimal>>();
-        var bidUpdates = new List<KeyValuePair<decimal, decimal>>();
+        Log.Debug("{EventId}: Requesting order book snapshot for {Symbol}",
+            LogEvents.DepthUpdated, symbol);
+
         try
         {
-            // Create a new Binance REST client (configured for COIN‑M Futures)
-            using (var client = new BinanceRestClient())
+            using var client = new BinanceRestClient();
+            var result = await client.UsdFuturesApi.ExchangeData.GetOrderBookAsync(
+                symbol.ToUpper(), limit);
+
+            if (!result.Success || result.Data == null)
             {
-                logger.LogInformation($"[CoinFutures OrderBookSnapshot, {symbol}] Requesting order book snapshot...");
-
-                var orderBookResult =
-                    await client.UsdFuturesApi.ExchangeData.GetOrderBookAsync(symbol.ToUpper(), limit);
-                if (!orderBookResult.Success)
-                {
-                    logger.LogInformation(
-                        $"[CoinFutures OrderBookSnapshot, {symbol}] Error retrieving snapshot: {orderBookResult.Error}");
-                    throw new Exception(orderBookResult.Error?.Message);
-                }
-
-                var orderBook = orderBookResult.Data;
-                if (orderBook != null)
-                {
-                    foreach (var ask in orderBook.Asks)
-                        askUpdates.Add(new KeyValuePair<decimal, decimal>(ask.Price, ask.Quantity));
-                    foreach (var bid in orderBook.Bids)
-                        bidUpdates.Add(new KeyValuePair<decimal, decimal>(bid.Price, bid.Quantity));
-                    logger.LogInformation(
-                        $"[CoinFutures OrderBookSnapshot, {symbol}] Snapshot retrieved successfully.");
-                }
-                else
-                {
-                    logger.LogInformation($"[CoinFutures OrderBookSnapshot, {symbol}] Received null order book data.");
-                }
+                Log.Warning("{EventId}: Snapshot error for {Symbol}: {Error}",
+                    LogEvents.SubscriptionRetry, symbol, result.Error?.Message);
+                throw new InvalidOperationException(result.Error?.Message);
             }
+
+            var asks = result.Data.Asks.Select(a => new KeyValuePair<decimal, decimal>(a.Price, a.Quantity)).ToList();
+            var bids = result.Data.Bids.Select(b => new KeyValuePair<decimal, decimal>(b.Price, b.Quantity)).ToList();
+
+            Log.Information("{EventId}: Snapshot retrieved for {Symbol}: {AskCount} asks, {BidCount} bids",
+                LogEvents.SubscriptionSuccess, symbol, asks.Count, bids.Count);
+
+            return (asks, bids);
         }
         catch (Exception ex)
         {
-            logger.LogInformation($"[CoinFutures OrderBookSnapshot, {symbol}] Exception: {ex.Message}");
+            Log.Error(ex, "{EventId}: Exception fetching snapshot for {Symbol}",
+                LogEvents.SubscriptionRetry, symbol);
             throw;
         }
-
-        return (askUpdates, bidUpdates);
     }
 }

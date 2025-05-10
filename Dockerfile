@@ -1,21 +1,29 @@
-﻿FROM mcr.microsoft.com/dotnet/runtime:9.0 AS base
-USER $APP_UID
-WORKDIR /app
-
+﻿# ── Stage 1: Build ───────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
-ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-COPY ["Darlin.csproj", "./"]
-RUN dotnet restore "Darlin.csproj"
+
+# copy csproj and restore
+COPY *.csproj ./
+RUN dotnet restore
+
+# copy everything else and publish
 COPY . .
-WORKDIR "/src/"
-RUN dotnet build "./Darlin.csproj" -c $BUILD_CONFIGURATION -o /app/build
+RUN dotnet publish -c Release -o /app
 
-FROM build AS publish
-ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./Darlin.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
-
-FROM base AS final
+# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
-COPY --from=publish /app/publish .
+
+# copy published output
+COPY --from=build /app ./
+
+# create writable folder for logs
+RUN mkdir -p logs
+
+# environment (optional override)
+ENV ASPNETCORE_ENVIRONMENT=Production
+
+# if you run Seq in another container named "seq", this makes that URL work:
+ENV Seq__ServerUrl=http://seq:5341
+
 ENTRYPOINT ["dotnet", "Darlin.dll"]

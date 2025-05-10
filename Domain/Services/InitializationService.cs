@@ -1,87 +1,97 @@
 ﻿using System.Collections.Concurrent;
+using Darlin.Logging;
+using Serilog;
 
 namespace Darlin.Domain.Services;
 
-public class InitializationService
+public class InitializationService(TickerManager tm)
 {
-    private readonly TickerManager                  _tm;
-    private readonly ILogger<InitializationService> _logger;
     private const int BatchSize = 50;
-    private static readonly TimeSpan DelayBetweenBatches =
-        TimeSpan.FromMinutes(1.25);
-
-    public InitializationService(
-        TickerManager tm,
-        ILogger<InitializationService> logger)
-    {
-        _tm     = tm;
-        _logger = logger;
-    }
+    private static readonly TimeSpan DelayBetweenBatches = TimeSpan.FromMinutes(1.25);
 
     public async Task RunAsync(CancellationToken ct)
     {
-        var tickers = _tm.Tickers;
-        _logger.LogInformation(
-            "Initializing {Count} tickers in batches of {BatchSize}…",
-            tickers.Count, BatchSize);
+        var tickers = tm.Tickers;
+        Log.Information(
+            "{EventId}: Initializing {Count} tickers in batches of {BatchSize}",
+            LogEvents.AppStart, tickers.Count, BatchSize);
 
         var success = new ConcurrentBag<string>();
         var failure = new ConcurrentBag<string>();
-        int idx = 0;
+        var idx = 0;
 
-        for (int i = 0; i < tickers.Count; i += BatchSize)
+        for (var i = 0; i < tickers.Count; i += BatchSize)
         {
-            var batch = tickers.Skip(i).Take(BatchSize);
-            var tasks = batch.Select(t =>
+            var batchNo = i / BatchSize + 1;
+            var batch = tickers.Skip(i).Take(BatchSize).ToList();
+
+            Log.Debug(
+                "{EventId}: Starting batch {BatchNo} with {BatchCount} tickers",
+                LogEvents.TickerInitAttempt, batchNo, batch.Count);
+
+            var tasks = batch.Select(ticker =>
                 Task.Run(async () =>
                 {
-                    int myId = Interlocked.Increment(ref idx);
-                    for (int attempt = 1; attempt <= 5; attempt++)
-                    {
-                        _logger.LogInformation(
-                            "Ticker #{Id} init {Name} ({Attempt}/5)…",
-                            myId, t.Name, attempt);
+                    var myId = Interlocked.Increment(ref idx);
 
-                        if (await t.Initialize())
+                    for (var attempt = 1; attempt <= 5; attempt++)
+                    {
+                        Log.Debug(
+                            "{EventId}: Ticker #{MyId} init {Name} ({Attempt}/5)",
+                            LogEvents.TickerInitAttempt,
+                            myId, ticker.Name, attempt);
+
+                        if (await ticker.Initialize())
                         {
-                            success.Add(t.Name);
-                            _logger.LogInformation(
-                                "Ticker #{Id} initialized → starting loop",
+                            success.Add(ticker.Name);
+                            Log.Information(
+                                "{EventId}: Ticker #{MyId} initialized, starting loop",
+                                LogEvents.TickerInitialized,
                                 myId);
 
-                            // ⚡ Immediately kick off its event-loop
+                            // start its event loop immediately
                             _ = Task.Run(async () =>
                             {
-                                _logger.LogInformation(
-                                    "Ticker #{Id} loop started",
+                                Log.Information(
+                                    "{EventId}: Ticker #{MyId} loop started",
+                                    LogEvents.TickerLoopStart,
                                     myId);
-                                await t.Start();
+                                await ticker.Start();
                             }, ct);
 
-                            return; // done with this ticker
+                            return;
                         }
 
                         await Task.Delay(TimeSpan.FromSeconds(5), ct);
                     }
 
-                    failure.Add(t.Name);
-                }, ct)).ToArray();
+                    failure.Add(ticker.Name);
+                    Log.Error(
+                        "{EventId}: Ticker {Name} failed to initialize after retries",
+                        LogEvents.TickerInitFailed,
+                        ticker.Name);
+                }, ct)
+            ).ToArray();
 
             await Task.WhenAll(tasks);
 
-            _logger.LogInformation(
-                "Batch {BatchNo} done. Waiting {Delay}…",
-                (i / BatchSize) + 1,
-                DelayBetweenBatches);
+            Log.Debug(
+                "{EventId}: Batch {BatchNo} done. Waiting {Delay}",
+                LogEvents.TickerLoopStart,
+                batchNo, DelayBetweenBatches);
+
             await Task.Delay(DelayBetweenBatches, ct);
         }
 
-        _logger.LogInformation(
-            "Initialization complete: {OK}/{Total}",
+        Log.Information(
+            "{EventId}: Initialization complete: {SuccessCount}/{Total}",
+            LogEvents.TickerInitialized,
             success.Count, tickers.Count);
-        if (failure.Any())
-            _logger.LogWarning(
-                "Failed to initialize: {Failed}",
+
+        if (!failure.IsEmpty)
+            Log.Warning(
+                "{EventId}: Failed to initialize: {FailedList}",
+                LogEvents.TickerInitFailed,
                 string.Join(", ", failure));
     }
 }

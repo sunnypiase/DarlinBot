@@ -7,7 +7,7 @@ public class OrderBookManager
 {
     private readonly SortedDictionary<decimal, OrderBookElement> _asks = new();
     private readonly SortedDictionary<decimal, OrderBookElement> _bids = new();
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     public OrderBookManager(
         IEnumerable<KeyValuePair<decimal, decimal>> initialAsks,
@@ -79,9 +79,7 @@ public class OrderBookManager
     {
         lock (_lock)
         {
-            if (_asks.TryGetValue(price, out element)) return true;
-            if (_bids.TryGetValue(price, out element)) return true;
-            return false;
+            return _asks.TryGetValue(price, out element) || _bids.TryGetValue(price, out element);
         }
     }
 

@@ -1,9 +1,8 @@
 ﻿using Darlin.Domain.Enums;
-using Darlin.Loggers;
 
 namespace Darlin.Domain.Models;
 
-public class ClosedPositionDTO
+public class ClosedPositionDto
 {
     public string TickerName { get; set; }
     public decimal TickerBidPrice { get; set; }

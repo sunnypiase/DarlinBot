@@ -5,56 +5,40 @@ using Darlin.Domain.Enums;
 using Darlin.Domain.Events;
 using Darlin.Domain.Models.Positions;
 using Darlin.Domain.Services;
-using Darlin.Loggers;
+using Darlin.Logging;
+using Serilog;
 
 namespace Darlin.Domain.Models;
 
-public class Ticker
+public class Ticker(
+    BinanceExchangeInfoRetriever exchangeInfoRetriever,
+    BinanceOrderBookSnapshotRetriever orderBookSnapshotRetriever,
+    BinanceVolumeRetriever volumeRetriever)
 {
-    private const int VolumeBufferSize = 288;
-    private readonly BinanceExchangeInfoRetriever _exchangeInfoRetriever;
-
-    private readonly ILogger<Ticker> _logger;
-    private readonly BinanceOrderBookSnapshotRetriever _orderBookSnapshotRetriever;
+    private const int VolumeBufferSize = 288 * 5;
 
     private readonly Lock _volumeLock = new();
-    private readonly BinanceVolumeRetriever _volumeRetriever;
     private readonly Queue<decimal> _volumes = new(VolumeBufferSize);
 
-    public Ticker(
-        ILogger<Ticker> logger,
-        BinanceExchangeInfoRetriever exchangeInfoRetriever,
-        BinanceOrderBookSnapshotRetriever orderBookSnapshotRetriever,
-        BinanceVolumeRetriever volumeRetriever)
-    {
-        _logger = logger;
-        _exchangeInfoRetriever = exchangeInfoRetriever;
-        _orderBookSnapshotRetriever = orderBookSnapshotRetriever;
-        _volumeRetriever = volumeRetriever;
-
-        EventChannel = Channel.CreateUnbounded<EventBase>();
-    }
-
-    public Channel<EventBase> EventChannel { get; }
+    private Channel<EventBase> EventChannel { get; } = Channel.CreateUnbounded<EventBase>();
     public ChannelWriter<EventBase> Writer => EventChannel.Writer;
-    public ChannelReader<EventBase> Reader => EventChannel.Reader;
+    private ChannelReader<EventBase> Reader => EventChannel.Reader;
 
-    public string Name { get; set; }
+    public required string Name { get; set; }
     public decimal Threshold { get; set; }
     public decimal Median { get; set; }
     public decimal StdDev { get; set; }
     public decimal BidPrice { get; set; }
     public decimal AskPrice { get; set; }
     public decimal PipSize { get; set; }
-    public Action<ClosedPositionDTO> LogClosedPosition { get; set; }
-    public OpenPositionFileLogger OpenPositionFileLogger { get; set; }
+    public Action<ClosedPositionDto> LogClosedPosition { get; set; }
 
     public PendingPosition? PendingLong { get; set; }
     public PendingPosition? PendingShort { get; set; }
     public OpenPosition? OpenPosition { get; set; }
 
-    public OrderBookManager OrderBookManager { get; set; }
-    public OrderBlockManager OrderBlockManager { get; set; }
+    public OrderBookManager OrderBookManager { get; set; } = null!;
+    public OrderBlockManager OrderBlockManager { get; set; } = null!;
 
     public OrderBookSnapshot GetOrderBookSnapshot()
     {
@@ -88,15 +72,18 @@ public class Ticker
 
     public async Task<bool> Initialize()
     {
+        Log.Information("{EventId}: Initializing {Ticker}",
+            LogEvents.TickerInitAttempt, Name);
+
         try
         {
             OrderBlockManager = new OrderBlockManager(Writer);
 
-            PipSize = await _exchangeInfoRetriever.GetPipSize(Name);
-            var (ask, bid) = await _orderBookSnapshotRetriever.GetOrderBookSnapshot(Name, 1000);
+            PipSize = await exchangeInfoRetriever.GetPipSize(Name);
+            var (ask, bid) = await orderBookSnapshotRetriever.GetOrderBookSnapshot(Name, 1000);
             OrderBookManager = new OrderBookManager(ask, bid);
 
-            var initialVolumes = await _volumeRetriever.GetVolumes(Name);
+            var initialVolumes = await volumeRetriever.GetVolumes(Name);
             lock (_volumeLock)
             {
                 foreach (var vol in initialVolumes)
@@ -108,15 +95,17 @@ public class Ticker
                 SetCalculatedThreshold(_volumes);
             }
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            _logger.LogError($"ERROR init {Name}: {e}");
+            Log.Error(ex, "{EventId}: {Ticker} init error",
+                LogEvents.TickerInitFailed, Name);
         }
 
         var ready = PipSize > 0 && OrderBookManager.AllLevels.Any() && Threshold > 0;
         if (ready)
         {
-            _logger.LogInformation($"Ticker {Name} initialized (Threshold={Threshold})");
+            Log.Information("{EventId}: {Ticker} initialized (Threshold={Threshold:F4})",
+                LogEvents.TickerInitialized, Name, Threshold);
             return true;
         }
 
@@ -126,20 +115,23 @@ public class Ticker
         sb.AppendLine($"Threshold: {Threshold}");
         sb.AppendLine($"PipSize: {PipSize}");
         sb.AppendLine($"OrderBook Count: {OrderBookManager?.AllLevels?.Count()}");
-        _logger.LogInformation($"ERROR: Ticker {Name} initialization failed: {sb}");
+        Log.Warning("{EventId}: {Ticker} initialization incomplete",
+            LogEvents.TickerInitFailed, sb);
         return false;
     }
 
     public async Task Start()
     {
-        _logger.LogInformation($"Ticker {Name} starting event loop");
+        Log.Information("{EventId}: {Ticker} loop starting",
+            LogEvents.TickerLoopStart, Name);
         try
         {
             await foreach (var ev in Reader.ReadAllAsync()) await ev.Handle(this);
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            _logger.LogInformation($"Ticker {Name} loop error: {e}");
+            Log.Error(ex, "{EventId}: {Ticker} loop error",
+                LogEvents.TickerLoopError, Name);
         }
     }
 
@@ -155,8 +147,9 @@ public class Ticker
 
     private void SetCalculatedThreshold(IEnumerable<decimal> volumes)
     {
-        var median = BinanceVolumeRetriever.CalculateMedian([.. volumes]);
-        var stdDev = BinanceVolumeRetriever.CalculateStdDev([.. volumes]);
+        var vols = volumes as decimal[] ?? volumes.ToArray();
+        var median = BinanceVolumeRetriever.CalculateMedian([.. vols]);
+        var stdDev = BinanceVolumeRetriever.CalculateStdDev([.. vols]);
         Threshold = median + stdDev * 1;
         Median = median;
         StdDev = stdDev;

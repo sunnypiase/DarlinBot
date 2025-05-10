@@ -2,17 +2,23 @@
 
 namespace Darlin.Domain.Events;
 
-public class PriceUpdateEvent(decimal BidPrice, decimal AskPrice) : EventBase
+public class PriceUpdateEvent(decimal bidPrice, decimal askPrice) : EventBase
 {
+    private decimal BidPrice { get; } = bidPrice;
+    private decimal AskPrice { get; } = askPrice;
+
     public override async ValueTask Handle(Ticker ticker)
     {
-        if (ticker.BidPrice == BidPrice && ticker.AskPrice == AskPrice) return;
+        if (ticker.BidPrice == BidPrice && ticker.AskPrice == AskPrice)
+            return;
+
         ticker.BidPrice = BidPrice;
         ticker.AskPrice = AskPrice;
         ticker.OrderBookManager.UpdateOrderBookPrices(AskPrice, BidPrice);
-        await new OrderBookUpdatedEvent().Handle(ticker);
 
-        // Log the price update.
-        //ticker.TickerLogger.LogPriceUpdate(ticker);
+        // Log.Verbose("{EventId}: {Ticker} PriceUpdate bid={BidPrice:F8} ask={AskPrice:F8}",
+        //     LogEvents.PriceUpdated, ticker.Name, BidPrice, AskPrice);
+
+        await new OrderBookUpdatedEvent().Handle(ticker);
     }
 }

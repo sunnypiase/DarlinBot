@@ -1,7 +1,8 @@
 ﻿using Darlin.Domain.Enums;
 using Darlin.Domain.Models;
 using Darlin.Domain.Models.Positions;
-using Darlin.Loggers;
+using Darlin.Logging;
+using Serilog;
 
 namespace Darlin.Domain.Events;
 
@@ -11,29 +12,29 @@ public class OrderBlockUpdatedEvent : EventBase
     {
         if (ticker.OpenPosition == null)
         {
-            var bestShortOrderBlock = ticker.OrderBlockManager.GetBestSignalOrderBlock(OrderBookSide.Ask);
-            var bestLongOrderBlock = ticker.OrderBlockManager.GetBestSignalOrderBlock(OrderBookSide.Bid);
+            var bestLong = ticker.OrderBlockManager.GetBestSignalOrderBlock(OrderBookSide.Bid);
+            var bestShort = ticker.OrderBlockManager.GetBestSignalOrderBlock(OrderBookSide.Ask);
 
-            if (ticker.PendingLong?.OrderBlock != bestLongOrderBlock)
+            if (ticker.PendingLong?.OrderBlock != bestLong)
             {
-                ticker.PendingLong = bestLongOrderBlock != null
-                    ? new PendingPosition(bestLongOrderBlock, ticker.PipSize)
-                    : null;
-                if (bestLongOrderBlock != null)
-                {
-                    // SimpleLogger.Log(ticker.Name + ": [PendingLong] " + bestLongOrderBlock.ToString());
-                }
+                ticker.PendingLong = bestLong is null
+                    ? null
+                    : new PendingPosition(bestLong, ticker.PipSize);
+
+                // if (bestLong is not null)
+                //     Log.Debug("{EventId}: {Ticker} PendingLong → {@OrderBlock}",
+                //         LogEvents.PendingLong, ticker.Name, bestLong);
             }
 
-            if (ticker.PendingShort?.OrderBlock != bestShortOrderBlock)
+            if (ticker.PendingShort?.OrderBlock != bestShort)
             {
-                ticker.PendingShort = bestShortOrderBlock != null
-                    ? new PendingPosition(bestShortOrderBlock, ticker.PipSize)
-                    : null;
-                if (bestShortOrderBlock != null)
-                {
-                    // SimpleLogger.Log(ticker.Name + ": [PendingShort] " + bestShortOrderBlock.ToString());
-                }
+                ticker.PendingShort = bestShort is null
+                    ? null
+                    : new PendingPosition(bestShort, ticker.PipSize);
+
+                // if (bestShort is not null)
+                //     Log.Debug("{EventId}: {Ticker} PendingShort → {@OrderBlock}",
+                //         LogEvents.PendingShort, ticker.Name, bestShort);
             }
 
             if (ticker.OpenPosition == null &&
@@ -43,17 +44,8 @@ public class OrderBlockUpdatedEvent : EventBase
                 ticker.OpenPosition = pos;
                 ticker.PendingLong = null;
                 ticker.PendingShort = null;
-                // SimpleLogger.Log(ticker.Name + ": [OpenLong] " + ticker.OpenPosition.OrderBlock.ToString());
-                ticker.OpenPositionFileLogger.Add(ticker.Name, new PositionInfo
-                {
-                    OpenTime = pos.OpenTime,
-                    OpenPrice = pos.OpenPrice,
-                    StopLossPrice = pos.StopLoss,
-                    TakeProfitPrice = pos.TakeProfit,
-                    OrderBlockPrice = pos.OrderBlock.Price,
-                    PositionSize = pos.PositionSize,
-                    OrderBookState = ticker.GetOrderBookSnapshot()
-                });
+                Log.Information("{EventId}: {Ticker} OpenLong @ {OpenPrice} vol={Volume}",
+                    LogEvents.OpenPosition, ticker.Name, pos.OrderBlock.Price, pos.PositionSize);
             }
 
             if (ticker.OpenPosition == null &&
@@ -63,17 +55,8 @@ public class OrderBlockUpdatedEvent : EventBase
                 ticker.OpenPosition = pos;
                 ticker.PendingLong = null;
                 ticker.PendingShort = null;
-                // SimpleLogger.Log(ticker.Name + ": [OpenShort] " + ticker.OpenPosition.OrderBlock.ToString());
-                ticker.OpenPositionFileLogger.Add(ticker.Name, new PositionInfo
-                {
-                    OpenTime = pos.OpenTime,
-                    OpenPrice = pos.OpenPrice,
-                    StopLossPrice = pos.StopLoss,
-                    TakeProfitPrice = pos.TakeProfit,
-                    OrderBlockPrice = pos.OrderBlock.Price,
-                    PositionSize = pos.PositionSize,
-                    OrderBookState = ticker.GetOrderBookSnapshot()
-                });
+                Log.Information("{EventId}: {Ticker} OpenShort @ {OpenPrice} vol={Volume}",
+                    LogEvents.OpenPosition, ticker.Name, pos.OrderBlock.Price, pos.PositionSize);
             }
         }
 
@@ -94,7 +77,7 @@ public class OrderBlockUpdatedEvent : EventBase
                     : (ticker.OpenPosition.OpenPrice - ticker.OpenPosition.MaxProfitPrice) * coins;
                 maxPotentialPnl -= commissionCost;
 
-                var closedDTO = new ClosedPositionDTO
+                var closedDTO = new ClosedPositionDto
                 {
                     TickerName = ticker.Name,
                     TickerBidPrice = ticker.BidPrice,
@@ -124,7 +107,12 @@ public class OrderBlockUpdatedEvent : EventBase
                 };
                 ticker.LogClosedPosition(closedDTO);
                 ticker.OpenPosition = null;
-                ticker.OpenPositionFileLogger.Remove(ticker.Name);
+                Log.Information("{EventId}: {Ticker} Closed {Reason} @ {Price} PnL={Pnl:F4}",
+                    LogEvents.ClosePosition,
+                    ticker.Name,
+                    closedDTO.CloseReason,
+                    closingPrice,
+                    pnl);
             }
             else if (ticker.OpenPosition.IsReachTakeProfit(ticker.BidPrice, ticker.AskPrice))
             {
@@ -136,7 +124,7 @@ public class OrderBlockUpdatedEvent : EventBase
                 var commissionCost = 2 * ticker.OpenPosition.PositionSize * (OpenPosition.CommissionPct / 100m);
                 pnl -= commissionCost;
 
-                var closedDTO = new ClosedPositionDTO
+                var closedDTO = new ClosedPositionDto
                 {
                     TickerName = ticker.Name,
                     TickerBidPrice = ticker.BidPrice,
@@ -166,12 +154,15 @@ public class OrderBlockUpdatedEvent : EventBase
                 };
                 ticker.LogClosedPosition(closedDTO);
                 ticker.OpenPosition = null;
-                ticker.OpenPositionFileLogger.Remove(ticker.Name);
+                Log.Information("{EventId}: {Ticker} Closed {Reason} @ {Price} PnL={Pnl:F4}",
+                    LogEvents.ClosePosition,
+                    ticker.Name,
+                    closedDTO.CloseReason,
+                    closingPrice,
+                    pnl);
             }
         }
 
-        // Use the PositionLogger to log current positions.
-        //ticker.PositionLogger.LogPositions(ticker);
         await Task.CompletedTask;
     }
 }

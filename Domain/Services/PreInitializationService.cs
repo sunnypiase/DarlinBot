@@ -7,70 +7,67 @@ using Darlin.DataRetrievers;
 using Darlin.Domain.Events;
 using Darlin.Domain.Models;
 using Darlin.Loggers;
+using Darlin.Logging;
 using Newtonsoft.Json;
+using Serilog;
 
 namespace Darlin.Domain.Services;
 
 public class PreInitializationService
 {
     private const int MaxBytes = 1000;
-    private const int TopN = 30;
-    private readonly CsvLogger<ClosedPositionDTO> _csv;
+    private const int TopN = 300;
+    private readonly IClosedPositionLogger _csv;
+
     private readonly BinanceDayTickerStatsRetriever _dayStats;
     private readonly BinanceExchangeInfoRetriever _info;
-    private readonly ILoggerFactory _lf;
-    private readonly ILogger<PreInitializationService> _logger;
-    private readonly OpenPositionFileLogger _openFile;
     private readonly BinanceOrderBookSnapshotRetriever _snapshot;
     private readonly BinanceSocketClient _socket;
     private readonly TickerManager _tm;
     private readonly BinanceVolumeRetriever _volume;
 
     public PreInitializationService(
-        ILogger<PreInitializationService> logger,
-        ILoggerFactory lf,
         BinanceDayTickerStatsRetriever dayStats,
         BinanceExchangeInfoRetriever info,
         BinanceOrderBookSnapshotRetriever snapshot,
         BinanceVolumeRetriever volume,
-        OpenPositionFileLogger openFile,
-        CsvLogger<ClosedPositionDTO> csv,
+        IClosedPositionLogger csv,
         BinanceSocketClient socket,
         TickerManager tm)
     {
-        _logger = logger;
-        _lf = lf;
         _dayStats = dayStats;
         _info = info;
         _snapshot = snapshot;
         _volume = volume;
-        _openFile = openFile;
         _csv = csv;
         _socket = socket;
         _tm = tm;
 
         // rate-limit logging
         BinanceExchange.RateLimiter.RateLimitTriggered += evt =>
-            _logger.LogInformation("Rate limit hit: {Evt}", evt);
+            Log.Information("{EventId}: Rate limit hit: {Evt}",
+                LogEvents.SubscriptionRetry, evt);
     }
 
-    public async Task RunAsync(CancellationToken сancellationToken)
+    public async Task RunAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Fetching top {TopN} tickers…", TopN);
+        Log.Information("{EventId}: Fetching top {TopN} tickers…",
+            LogEvents.AppStart, TopN);
         var symbols = await _dayStats.GetTopTickersByVolume(TopN);
 
-        _logger.LogInformation("Creating {Count} Ticker instances…", symbols.Count);
+        Log.Information("{EventId}: Creating {Count} Ticker instances…",
+            LogEvents.AppStart, symbols.Count);
         var tickers = symbols.Select(sym =>
         {
             var t = new Ticker(
-                _lf.CreateLogger<Ticker>(),
                 _info,
                 _snapshot,
                 _volume
-            );
-            t.Name = sym;
-            t.LogClosedPosition = _csv.Log;
-            t.OpenPositionFileLogger = _openFile;
+            )
+            {
+                Name = sym,
+                LogClosedPosition = _csv.Log
+            };
             return t;
         }).ToList();
 
@@ -79,24 +76,24 @@ public class PreInitializationService
         );
         _tm.SetTickers(tickers, map);
 
-        _logger.LogInformation("Subscribing to Binance streams…");
+        Log.Information("{EventId}: Subscribing to Binance streams…",
+            LogEvents.SubscriptionSuccess);
         var batches = BatchByJsonByteLimit(symbols, MaxBytes);
         foreach (var batch in batches)
         {
-            _ = SubscribePriceWithRetryAsync(batch);
-            _ = SubscribeDepthWithRetryAsync(batch);
-            _ = SubscribeKlineWithRetryAsync(batch, KlineInterval.FiveMinutes);
+            _ = SubscribePriceWithRetryAsync(batch, cancellationToken);
+            _ = SubscribeDepthWithRetryAsync(batch, cancellationToken);
+            _ = SubscribeKlineWithRetryAsync(batch, KlineInterval.FiveMinutes, cancellationToken);
         }
     }
 
-    private async Task SubscribePriceWithRetryAsync(List<string> batch)
+    private async Task SubscribePriceWithRetryAsync(List<string> batch, CancellationToken ct)
     {
         var label = string.Join(',', batch);
         while (true)
         {
             var res = await _socket
-                .UsdFuturesApi
-                .ExchangeData
+                .UsdFuturesApi.ExchangeData
                 .SubscribeToBookTickerUpdatesAsync(batch, data =>
                 {
                     if (_tm.TickerMap.TryGetValue(data.Data.Symbol, out var t))
@@ -104,74 +101,80 @@ public class PreInitializationService
                             data.Data.BestBidPrice,
                             data.Data.BestAskPrice
                         ));
-                });
+                }, ct);
 
             if (!res.Success)
             {
-                _logger.LogWarning("[PRICE] {L} err {E}, retrying…",
-                    label, res.Error);
-                await Task.Delay(5000);
+                Log.Warning("{EventId}: [PRICE] {Label} error {Error}, retrying…",
+                    LogEvents.SubscriptionRetry, label, res.Error);
+                await Task.Delay(5000, ct);
                 continue;
             }
 
-            _logger.LogInformation("[PRICE] {L} ✅", label);
+            Log.Information("{EventId}: [PRICE] {Label} subscribed",
+                LogEvents.SubscriptionSuccess, label);
             res.Data.ConnectionClosed += () =>
             {
-                _logger.LogInformation("[PRICE] {L} disconnected → re-sub", label);
-                _ = SubscribePriceWithRetryAsync(batch);
+                Log.Warning("{EventId}: [PRICE] {Label} disconnected → retry",
+                    LogEvents.SubscriptionRetry, label);
+                _ = SubscribePriceWithRetryAsync(batch, ct);
             };
             break;
         }
     }
 
-    private async Task SubscribeDepthWithRetryAsync(List<string> batch)
+    private async Task SubscribeDepthWithRetryAsync(List<string> batch, CancellationToken ct)
     {
         var label = string.Join(',', batch);
         while (true)
         {
             var res = await _socket
-                .UsdFuturesApi
-                .ExchangeData
+                .UsdFuturesApi.ExchangeData
                 .SubscribeToOrderBookUpdatesAsync(batch, 100, data =>
                 {
-                    if (!_tm.TickerMap.TryGetValue(data.Data.Symbol, out var t)) return;
-                    var asks = data.Data.Asks
-                        .Select(a => new KeyValuePair<decimal, decimal>(a.Price, a.Quantity));
-                    var bids = data.Data.Bids
-                        .Select(b => new KeyValuePair<decimal, decimal>(b.Price, b.Quantity));
-                    t.Writer.TryWrite(new OrderBookValuesUpdate(asks, bids)
+                    if (_tm.TickerMap.TryGetValue(data.Data.Symbol, out var t))
                     {
-                        EventTime = data.Data.EventTime
-                    });
-                });
+                        var asks = data.Data.Asks
+                            .Select(a => new KeyValuePair<decimal, decimal>(a.Price, a.Quantity));
+                        var bids = data.Data.Bids
+                            .Select(b => new KeyValuePair<decimal, decimal>(b.Price, b.Quantity));
+                        t.Writer.TryWrite(new OrderBookValuesUpdate(asks, bids)
+                        {
+                            EventTime = data.Data.EventTime
+                        });
+                    }
+                }, ct);
 
             if (!res.Success)
             {
-                _logger.LogWarning("[DEPTH] {L} err {E}, retrying…",
-                    label, res.Error);
-                await Task.Delay(5000);
+                Log.Warning("{EventId}: [DEPTH] {Label} error {Error}, retrying…",
+                    LogEvents.SubscriptionRetry, label, res.Error);
+                await Task.Delay(5000, ct);
                 continue;
             }
 
-            _logger.LogInformation("[DEPTH] {L} ✅", label);
+            Log.Information("{EventId}: [DEPTH] {Label} subscribed",
+                LogEvents.SubscriptionSuccess, label);
             res.Data.ConnectionClosed += () =>
             {
-                _logger.LogInformation("[DEPTH] {L} disconnected → re-sub", label);
-                _ = SubscribeDepthWithRetryAsync(batch);
+                Log.Warning("{EventId}: [DEPTH] {Label} disconnected → retry",
+                    LogEvents.SubscriptionRetry, label);
+                _ = SubscribeDepthWithRetryAsync(batch, ct);
             };
             break;
         }
     }
 
     private async Task SubscribeKlineWithRetryAsync(
-        List<string> batch, KlineInterval interval)
+        List<string> batch,
+        KlineInterval interval,
+        CancellationToken ct)
     {
         var label = string.Join(',', batch);
         while (true)
         {
             var res = await _socket
-                .UsdFuturesApi
-                .ExchangeData
+                .UsdFuturesApi.ExchangeData
                 .SubscribeToKlineUpdatesAsync(batch, interval, data =>
                 {
                     if ((data?.Data?.Data?.Final ?? false)
@@ -179,28 +182,31 @@ public class PreInitializationService
                         t.Writer.TryWrite(
                             new TresholdEvent(data.Data.Data.Volume)
                         );
-                });
+                }, ct: ct);
 
             if (!res.Success)
             {
-                _logger.LogWarning("[KLINE] {L} err {E}, retrying…",
-                    label, res.Error);
-                await Task.Delay(5000);
+                Log.Warning("{EventId}: [KLINE] {Label} error {Error}, retrying…",
+                    LogEvents.SubscriptionRetry, label, res.Error);
+                await Task.Delay(5000, ct);
                 continue;
             }
 
-            _logger.LogInformation("[KLINE] {L} ✅", label);
+            Log.Information("{EventId}: [KLINE] {Label} subscribed",
+                LogEvents.SubscriptionSuccess, label);
             res.Data.ConnectionClosed += () =>
             {
-                _logger.LogInformation("[KLINE] {L} disconnected → re-sub", label);
-                _ = SubscribeKlineWithRetryAsync(batch, interval);
+                Log.Warning("{EventId}: [KLINE] {Label} disconnected → retry",
+                    LogEvents.SubscriptionRetry, label);
+                _ = SubscribeKlineWithRetryAsync(batch, interval, ct);
             };
             break;
         }
     }
 
     private static List<List<string>> BatchByJsonByteLimit(
-        IEnumerable<string> items, int maxBytes)
+        IEnumerable<string> items,
+        int maxBytes)
     {
         var batches = new List<List<string>>();
         var curr = new List<string>();
@@ -212,7 +218,7 @@ public class PreInitializationService
             if (size > maxBytes)
             {
                 curr.RemoveAt(curr.Count - 1);
-                batches.Add(new List<string>(curr));
+                batches.Add([..curr]);
                 curr.Clear();
                 curr.Add(it);
             }

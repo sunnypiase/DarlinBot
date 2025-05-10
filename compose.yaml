@@ -1,0 +1,43 @@
+﻿version: '3.8'
+
+services:
+  seq:
+    image: datalust/seq:latest
+    container_name: seq
+    environment:
+      ACCEPT_EULA: "Y"
+    ports:
+      - "5341:80"
+    volumes:
+      - seq_data:/data
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  darlin-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: darlin-worker:latest
+    container_name: darlin-worker
+    depends_on:
+      - seq
+      - mongo
+    environment:
+      Seq__ServerUrl: "http://seq:5341"
+      Mongo__ConnectionString: "mongodb://mongo:27017"
+      Mongo__Database: "DarlinDb"
+    volumes:
+      - ./logs:/app/logs
+    restart: on-failure
+
+volumes:
+  seq_data:
+  mongo_data:

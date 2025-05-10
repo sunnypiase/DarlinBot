@@ -1,0 +1,16 @@
+﻿namespace Darlin;
+
+public static class Config
+{
+    public static readonly HashSet<string> Blacklist =
+    [
+        "USDCUSDT", "FDUSDUSDT", "EURUSDT", "WIFUSDT", "VITEUSDT",
+        "AMBUSDT", "LITUSDT", "STMXUSDT", "CLVUSDT", "USTCUSDT", "BNXUSDT",
+        "XUSDUSDT", "VIDTUSDT", "AGIXUSDT", "LINAUSDT", "FTMUSDT", "WAVESUSDT",
+        "OCEANUSDT", "STRAXUSDT", "RENUSDT", "UNFIUSDT", "DGBUSDT", "TROYUSDT",
+        "SNTUSDT", "BLZUSDT", "COMBOUSDT", "NULSUSDT", "NOTUSDT", "KEYUSDT", "LOOMUSDT",
+        "MDTUSDT", "BONDUSDT", "KLAYUSDT", "XEMUSDT", "OMGUSDT", "REEFUSDT", "RADUSDT",
+        "GLMRUSDT", "BADGERUSDT", "CTKUSDT", "DARUSDT",
+        "SLPUSDT", "CVXUSDT", "BALUSDT", "ORBSUSDT", "STPTUSDT", "ALPACAUSDT"
+    ];
+}
