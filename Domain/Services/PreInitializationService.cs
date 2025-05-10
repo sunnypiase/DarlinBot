@@ -16,7 +16,7 @@ namespace Darlin.Domain.Services;
 public class PreInitializationService
 {
     private const int MaxBytes = 1000;
-    private const int TopN = 30;
+    private const int TopN = 300;
     private readonly IClosedPositionLogger _csv;
 
     private readonly BinanceDayTickerStatsRetriever _dayStats;
