@@ -7,7 +7,7 @@ public class PriceUpdateEvent(decimal bidPrice, decimal askPrice) : EventBase
     private decimal BidPrice { get; } = bidPrice;
     private decimal AskPrice { get; } = askPrice;
 
-    public override async ValueTask Handle(Ticker ticker)
+    public override void Handle(Ticker ticker)
     {
         if (ticker.BidPrice == BidPrice && ticker.AskPrice == AskPrice)
             return;
@@ -19,6 +19,6 @@ public class PriceUpdateEvent(decimal bidPrice, decimal askPrice) : EventBase
         // Log.Verbose("{EventId}: {Ticker} PriceUpdate bid={BidPrice:F8} ask={AskPrice:F8}",
         //     LogEvents.PriceUpdated, ticker.Name, BidPrice, AskPrice);
 
-        await new OrderBookUpdatedEvent().Handle(ticker);
+        new OrderBookUpdatedEvent().Handle(ticker);
     }
 }

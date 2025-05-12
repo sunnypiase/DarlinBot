@@ -4,7 +4,7 @@ namespace Darlin.Domain.Events;
 
 public class OrderBookUpdatedEvent : EventBase
 {
-    public override async ValueTask Handle(Ticker ticker)
+    public override void Handle(Ticker ticker)
     {
         // 1) Remove outdated order‑blocks
         var toRemove = new List<decimal>();
@@ -42,6 +42,6 @@ public class OrderBookUpdatedEvent : EventBase
             }
 
         // 3) Fire the next stage
-        await new OrderBlockUpdatedEvent().Handle(ticker);
+        new OrderBlockUpdatedEvent().Handle(ticker);
     }
 }

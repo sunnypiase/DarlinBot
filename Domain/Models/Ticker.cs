@@ -126,7 +126,7 @@ public class Ticker(
             LogEvents.TickerLoopStart, Name);
         try
         {
-            await foreach (var ev in Reader.ReadAllAsync()) await ev.Handle(this);
+            await foreach (var ev in Reader.ReadAllAsync()) ev.Handle(this);
         }
         catch (Exception ex)
         {

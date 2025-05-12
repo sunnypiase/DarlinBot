@@ -8,7 +8,7 @@ namespace Darlin.Domain.Events;
 
 public class OrderBlockUpdatedEvent : EventBase
 {
-    public override async ValueTask Handle(Ticker ticker)
+    public override void Handle(Ticker ticker)
     {
         if (ticker.OpenPosition == null)
         {
@@ -154,7 +154,5 @@ public class OrderBlockUpdatedEvent : EventBase
                     pnl);
             }
         }
-
-        await Task.CompletedTask;
     }
 }
